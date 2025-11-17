@@ -90,11 +90,12 @@ DB_PORT=${DB_PORT:-5432}
 # Validar si es Enterprise o Community
 read -p "${YELLOW}¿Es una instalación Enterprise? (y/n): ${RESET}" IS_ENTERPRISE
 read -p "${YELLOW}¿Activar modo desarrollador? (y/n): ${RESET}" DEV_MODE
+read -p "${YELLOW}¿Limpiar volúmenes de base de datos existentes? (y/n): ${RESET}" WIPE_VOLUMES
 
 # Nombre del repo y carpeta
 REPO_NAME=$(basename -s .git "$REPO_URL")
-BASE_DIR=~/desarrollo/odoo
-ODOO_IMAGES_DIR=~/desarrollo/odoo/odoo_images
+BASE_DIR=~/development/odoo
+ODOO_IMAGES_DIR=~/odoo_images
 REPO_DIR=$BASE_DIR/$REPO_NAME
 
 # Clonar repo si no existe
@@ -122,18 +123,23 @@ else
     ODOO_IMAGE="odoo:${ODOO_VERSION}"
 fi
 
-# Copiar .deb si existe
+# Definir variables para .deb
 DEB_FILE="$ODOO_IMAGES_DIR/odoo_${ODOO_VERSION}.deb"
 DEB_EXISTS=false
 
-if [ -f "$DEB_FILE" ]; then
-    echo -e "${BLUE}Copiando paquete Odoo...${RESET}"
-    cp "$DEB_FILE" "$REPO_DIR/" & pid=$!
-    show_progress $pid "Copiando paquete Odoo"
-    wait $pid
-    DEB_EXISTS=true
+# Solo usar .deb si el usuario eligió Enterprise
+if [[ "$IS_ENTERPRISE" == "y" || "$IS_ENTERPRISE" == "Y" ]]; then
+    if [ -f "$DEB_FILE" ]; then
+        echo -e "${BLUE}Copiando paquete Odoo Enterprise...${RESET}"
+        cp "$DEB_FILE" "$REPO_DIR/" & pid=$!
+        show_progress $pid "Copiando paquete Odoo"
+        wait $pid
+        DEB_EXISTS=true
+    else
+        echo -e "${YELLOW}⚠️ No se encontró $DEB_FILE para Enterprise${RESET}"
+    fi
 else
-    echo -e "${YELLOW}⚠️ No se encontró $DEB_FILE${RESET}"
+    echo -e "${BLUE}Usando versión Community (sin .deb)${RESET}"
 fi
 
 # Generar docker-compose.yml mejorado (SIN VERSION OBSOLETA)
@@ -143,7 +149,7 @@ echo -e "${BLUE}Generando docker-compose.yml...${RESET}"
 cat > "$REPO_DIR/docker-compose.yml" <<EOF
 services:
   db_${INSTANCE}:
-    image: postgres:13
+    image: postgres:16
     container_name: db_${INSTANCE}
     restart: unless-stopped
     environment:
@@ -194,11 +200,11 @@ EOF
 # Agregar comando según el modo
 if [[ "$DEV_MODE" == "y" || "$DEV_MODE" == "Y" ]]; then
     cat >> "$REPO_DIR/docker-compose.yml" <<EOF
-    command: ["odoo", "--dev=reload,qweb,werkzeug,xml"]
+    command: ["odoo", "-i", "base", "--dev=reload,qweb,werkzeug,xml"]
 EOF
 else
     cat >> "$REPO_DIR/docker-compose.yml" <<EOF
-    command: odoo
+    command: ["odoo", "-i", "base"]
 EOF
 fi
 
@@ -274,6 +280,14 @@ cleanup_containers() {
     if docker ps -a --format '{{.Names}}' | grep -q "^db_${INSTANCE}$"; then
         echo -e "${YELLOW}Removiendo contenedor db_${INSTANCE}...${RESET}"
         docker rm -f "db_${INSTANCE}" 2>/dev/null || true
+    fi
+    
+    # Limpiar volúmenes antiguos si el usuario lo solicitó
+    if [[ "$WIPE_VOLUMES" == "y" || "$WIPE_VOLUMES" == "Y" ]]; then
+        echo -e "${YELLOW}🗑️ Limpiando volúmenes antiguos...${RESET}"
+        docker volume rm -f db_data_${INSTANCE} 2>/dev/null || true
+        docker volume rm -f odoo_web_data_${INSTANCE} 2>/dev/null || true
+        docker volume rm -f odoo_filestore_${INSTANCE} 2>/dev/null || true
     fi
 }
 
